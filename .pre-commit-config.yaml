@@ -1,0 +1,32 @@
+# Pre-commit hooks for lightning-profiler.
+# Install with:  pre-commit install
+# Run on all files:  pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty
+        description: "Type-check Python files with ty (Astral)"
+        entry: ty check
+        language: system
+        types: [python]
+        files: ^src/
+        args: []
+
+      - id: pytest
+        name: pytest
+        description: "Run tests with coverage"
+        entry: uv run pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+        args: ["--quiet"]

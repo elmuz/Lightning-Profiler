@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Testing
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+
+# Environment
+.venv/
+*.egg
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Profiler output
+profiler_output/
+*.json
+*.trace
+*.nsys-rep

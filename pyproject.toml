@@ -1,0 +1,57 @@
+[project]
+name = "lightning-profiler"
+version = "0.1.0"
+description = "Device-level and pipeline-level profiling for PyTorch Lightning training loops"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "elmuz", email = "dev@example.com" }]
+keywords = ["pytorch", "lightning", "profiling", "cuda", "mlops"]
+
+dependencies = [
+    "pytorch-lightning>=2.0",
+    "torch>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.8",
+    "ty>=0.0.55",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "ARG", "C4"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG002"]
+"src/lightning_profiler/device_bottleneck.py" = ["ARG002"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short --cov=lightning_profiler --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+source = ["lightning_profiler"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
