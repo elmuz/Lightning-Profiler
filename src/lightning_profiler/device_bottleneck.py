@@ -116,9 +116,14 @@ class DeviceBottleneckCallback(Callback):
     output_path:
         Optional file path to write a JSON array of per-step metrics
         at the end of training. Default ``None``.
+    warmup_epochs:
+        Number of initial epochs to skip entirely (no CUDA events are
+        created, no metrics collected). Useful for ignoring the first epoch
+        where data is loaded from disk, decoded, and cached in RAM.
+        Default ``0``.
     warmup_steps:
-        Number of initial steps to skip (CUDA events are unreliable during
-        GPU warmup). Default ``5``.
+        Number of initial steps to skip within a non-warmup epoch (CUDA
+        events are unreliable during GPU warmup). Default ``5``.
     """
 
     def __init__(
@@ -127,6 +132,7 @@ class DeviceBottleneckCallback(Callback):
         gpu_threshold: float = 0.98,
         log_every_n_steps: int = 50,
         output_path: str | Path | None = None,
+        warmup_epochs: int = 0,
         warmup_steps: int = 5,
     ) -> None:
         super().__init__()
@@ -141,11 +147,14 @@ class DeviceBottleneckCallback(Callback):
             )
         if log_every_n_steps < 0:
             raise ValueError(f"log_every_n_steps must be >= 0, got {log_every_n_steps}")
+        if warmup_epochs < 0:
+            raise ValueError(f"warmup_epochs must be >= 0, got {warmup_epochs}")
 
         self.cpu_threshold = cpu_threshold
         self.gpu_threshold = gpu_threshold
         self.log_every_n_steps = log_every_n_steps
         self.output_path = Path(output_path) if output_path else None
+        self.warmup_epochs = warmup_epochs
         self.warmup_steps = warmup_steps
 
         self._has_cuda: bool = torch.cuda.is_available()
@@ -171,6 +180,28 @@ class DeviceBottleneckCallback(Callback):
     # ------------------------------------------------------------------
     # Lightning hooks
     # ------------------------------------------------------------------
+
+    def on_fit_start(
+        self,
+        trainer: Trainer,
+        pl_module: pl.LightningModule,
+    ) -> None:
+        """Warn if warmup_epochs >= max_epochs (would skip all profiling).
+
+        At init time we don't have access to the trainer, so this check
+        runs here once ``trainer.max_epochs`` is available.
+        """
+        if (
+            self.warmup_epochs > 0
+            and trainer.max_epochs is not None
+            and self.warmup_epochs >= trainer.max_epochs
+        ):
+            log.warning(
+                "[DeviceBottleneck] warmup_epochs=%d >= max_epochs=%d — "
+                "all epochs are warmup, no metrics will be collected.",
+                self.warmup_epochs,
+                trainer.max_epochs,
+            )
 
     def on_train_epoch_start(
         self,
@@ -210,6 +241,10 @@ class DeviceBottleneckCallback(Callback):
         batch: object,
         batch_idx: int,
     ) -> None:
+        # Skip warmup epochs entirely (no CUDA events, no metrics).
+        if self.warmup_epochs > 0 and trainer.current_epoch < self.warmup_epochs:
+            return
+
         if not self._has_cuda:
             return
 
@@ -225,6 +260,10 @@ class DeviceBottleneckCallback(Callback):
         batch: object,
         batch_idx: int,
     ) -> None:
+        # Skip warmup epochs entirely (no CUDA events were created).
+        if self.warmup_epochs > 0 and trainer.current_epoch < self.warmup_epochs:
+            return
+
         if not self._has_cuda or self._current_gpu_start is None or self._current_gpu_end is None:
             return
 

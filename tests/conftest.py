@@ -59,11 +59,18 @@ def mock_cuda_available() -> Generator[None, None, None]:
 # ---------------------------------------------------------------------------
 
 
-def make_mock_trainer() -> MagicMock:
-    """Create a lightweight mock Lightning Trainer."""
+def make_mock_trainer(current_epoch: int = 0) -> MagicMock:
+    """Create a lightweight mock Lightning Trainer.
+
+    Parameters
+    ----------
+    current_epoch:
+        The epoch number to simulate. Default ``0``.
+    """
     trainer = MagicMock(spec=pl.Trainer)
     trainer.global_rank = 0
     trainer.num_devices = 1
+    trainer.current_epoch = current_epoch
     return trainer
 
 

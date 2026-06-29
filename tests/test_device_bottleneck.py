@@ -420,6 +420,170 @@ class TestEpochBoundaryFlush:
 
 
 # ======================================================================
+# Epoch warmup (warmup_epochs)
+# ======================================================================
+
+
+class TestEpochWarmup:
+    """Tests for the ``warmup_epochs`` parameter."""
+
+    def test_warmup_epochs_skips_entire_epoch(self, mock_cuda_available) -> None:
+        """With warmup_epochs=1, all steps in epoch 0 produce no metrics."""
+        cb = DeviceBottleneckCallback(warmup_epochs=1, warmup_steps=0, log_every_n_steps=0)
+        mock_module = MagicMock(spec=pl.LightningModule)
+        fake_clock = 0.0
+
+        with patch("time.perf_counter", wraps=lambda: fake_clock):
+            # Epoch 0 (warmup) — 3 steps, all skipped
+            trainer = MagicMock(spec=pl.Trainer)
+            trainer.current_epoch = 0
+            cb.on_train_epoch_start(trainer, mock_module)
+            for i in range(3):
+                fake_clock += 0.050
+                cb.on_train_batch_start(trainer, mock_module, None, i)
+                fake_clock += 0.010
+                cb.on_train_batch_end(trainer, mock_module, None, None, i)
+            cb.on_train_epoch_end(trainer, mock_module)
+
+        assert cb.metrics == []
+        assert cb._pending_events == []
+
+    def test_warmup_epochs_then_profiles(self, mock_cuda_available) -> None:
+        """With warmup_epochs=1, epoch 0 is skipped, epoch 1 is profiled."""
+        cb = DeviceBottleneckCallback(warmup_epochs=1, warmup_steps=0, log_every_n_steps=0)
+        mock_module = MagicMock(spec=pl.LightningModule)
+        fake_clock = 0.0
+
+        with patch("time.perf_counter", wraps=lambda: fake_clock):
+            # Epoch 0 (warmup) — skipped
+            trainer_ep0 = MagicMock(spec=pl.Trainer)
+            trainer_ep0.current_epoch = 0
+            cb.on_train_epoch_start(trainer_ep0, mock_module)
+            for i in range(2):
+                fake_clock += 0.050
+                cb.on_train_batch_start(trainer_ep0, mock_module, None, i)
+                fake_clock += 0.010
+                cb.on_train_batch_end(trainer_ep0, mock_module, None, None, i)
+            cb.on_train_epoch_end(trainer_ep0, mock_module)
+
+            # Epoch 1 (real) — profiled
+            trainer_ep1 = MagicMock(spec=pl.Trainer)
+            trainer_ep1.current_epoch = 1
+            cb.on_train_epoch_start(trainer_ep1, mock_module)
+            for i in range(3):
+                fake_clock += 0.050
+                cb.on_train_batch_start(trainer_ep1, mock_module, None, i)
+                fake_clock += 0.010
+                cb.on_train_batch_end(trainer_ep1, mock_module, None, None, i)
+            cb.on_train_epoch_end(trainer_ep1, mock_module)
+
+        cb._flush_pending_events()
+        # Epoch 1 has 3 steps: step 1 skipped (no prev baseline), steps 2-3 → 2 metrics
+        assert len(cb.metrics) == 2
+        for m in cb.metrics:
+            assert m.step_idx > 1
+
+    def test_warmup_epochs_zero_is_noop(self, mock_cuda_available) -> None:
+        """warmup_epochs=0 behaves identically to not setting it."""
+        cb = DeviceBottleneckCallback(warmup_epochs=0, warmup_steps=0, log_every_n_steps=0)
+        mock_module = MagicMock(spec=pl.LightningModule)
+        fake_clock = 0.0
+
+        with patch("time.perf_counter", wraps=lambda: fake_clock):
+            trainer = MagicMock(spec=pl.Trainer)
+            trainer.current_epoch = 0
+            cb.on_train_epoch_start(trainer, mock_module)
+            for i in range(4):
+                fake_clock += 0.050
+                cb.on_train_batch_start(trainer, mock_module, None, i)
+                fake_clock += 0.010
+                cb.on_train_batch_end(trainer, mock_module, None, None, i)
+            cb.on_train_epoch_end(trainer, mock_module)
+
+        cb._flush_pending_events()
+        # 4 steps: step 1 skipped (no prev baseline), steps 2-4 → 3 metrics
+        assert len(cb.metrics) == 3
+
+    def test_negative_warmup_epochs_raises(self) -> None:
+        with pytest.raises(ValueError, match="warmup_epochs"):
+            DeviceBottleneckCallback(warmup_epochs=-1)
+
+    def test_warmup_epochs_with_warmup_steps(self, mock_cuda_available) -> None:
+        """Both warmup_epochs and warmup_steps compose correctly.
+
+        Epoch 0 (warmup_epoch=1): entirely skipped.
+        Epoch 1 (real): warmup_steps=2 skips first 2 measured steps.
+        """
+        cb = DeviceBottleneckCallback(warmup_epochs=1, warmup_steps=2, log_every_n_steps=0)
+        mock_module = MagicMock(spec=pl.LightningModule)
+        fake_clock = 0.0
+
+        with patch("time.perf_counter", wraps=lambda: fake_clock):
+            # Epoch 0 (warmup by epoch) — entirely skipped, _step_count stays 0
+            trainer_ep0 = MagicMock(spec=pl.Trainer)
+            trainer_ep0.current_epoch = 0
+            cb.on_train_epoch_start(trainer_ep0, mock_module)
+            for i in range(2):
+                fake_clock += 0.050
+                cb.on_train_batch_start(trainer_ep0, mock_module, None, i)
+                fake_clock += 0.010
+                cb.on_train_batch_end(trainer_ep0, mock_module, None, None, i)
+            cb.on_train_epoch_end(trainer_ep0, mock_module)
+
+            # Epoch 1 (real) with warmup_steps=2
+            trainer_ep1 = MagicMock(spec=pl.Trainer)
+            trainer_ep1.current_epoch = 1
+            cb.on_train_epoch_start(trainer_ep1, mock_module)
+            for i in range(5):
+                fake_clock += 0.050
+                cb.on_train_batch_start(trainer_ep1, mock_module, None, i)
+                fake_clock += 0.010
+                cb.on_train_batch_end(trainer_ep1, mock_module, None, None, i)
+            cb.on_train_epoch_end(trainer_ep1, mock_module)
+
+        cb._flush_pending_events()
+        # Epoch 1: 5 steps.
+        # Step 1 (i=0): step_count=1, no prev baseline → skipped.
+        # Step 2 (i=1): step_count=2, warmup_steps=2 → 2 > 2? No → skipped.
+        # Steps 3-5 (i=2,3,4): step_count=3,4,5 > 2 → recorded → 3 metrics.
+        assert len(cb.metrics) == 3
+
+    def test_warmup_epochs_no_cuda_noop(self) -> None:
+        """With no CUDA, warmup_epochs guard does not crash."""
+        cb = DeviceBottleneckCallback(warmup_epochs=2, warmup_steps=0)
+        mock_module = MagicMock(spec=pl.LightningModule)
+
+        trainer = MagicMock(spec=pl.Trainer)
+        trainer.current_epoch = 0
+        cb.on_train_epoch_start(trainer, mock_module)
+        cb.on_train_batch_start(trainer, mock_module, None, 0)
+        cb.on_train_batch_end(trainer, mock_module, None, None, 0)
+        cb.on_train_epoch_end(trainer, mock_module)
+
+        assert cb.metrics == []
+
+    def test_warmup_epochs_warning_at_fit_start(self, mock_cuda_available, caplog) -> None:
+        """on_fit_start warns when warmup_epochs >= max_epochs."""
+        cb = DeviceBottleneckCallback(warmup_epochs=3, warmup_steps=0)
+        trainer = MagicMock(spec=pl.Trainer)
+        trainer.max_epochs = 3
+        module = MagicMock(spec=pl.LightningModule)
+
+        cb.on_fit_start(trainer, module)
+        assert "warmup_epochs=3 >= max_epochs=3" in caplog.text
+
+    def test_warmup_epochs_no_warning_when_smaller(self, mock_cuda_available, caplog) -> None:
+        """No warning when warmup_epochs < max_epochs."""
+        cb = DeviceBottleneckCallback(warmup_epochs=1, warmup_steps=0)
+        trainer = MagicMock(spec=pl.Trainer)
+        trainer.max_epochs = 5
+        module = MagicMock(spec=pl.LightningModule)
+
+        cb.on_fit_start(trainer, module)
+        assert "warmup_epochs" not in caplog.text
+
+
+# ======================================================================
 # H2D transfer hooks exist on LightningModule
 # ======================================================================
 
